@@ -5,3 +5,8 @@ tests
 tests-examples
 playwright.config.ts
 .env
+src
+playwright-report
+blob-report
+tsconfig.json
+*.log

@@ -1,10 +1,66 @@
 import { createTransport } from "nodemailer";
-import AnsiToHtml from 'ansi-to-html';
+import AnsiToHtml from "ansi-to-html";
+import type {
+  FullConfig,
+  FullResult,
+  Reporter,
+  Suite,
+  TestCase,
+  TestResult,
+} from "@playwright/test/reporter";
+
+type ReporterOptions = {
+  reportName?: string;
+  reportDesc?: string;
+  reportLink?: string;
+  link?: string;
+  smtpHost: string;
+  smtpPort: number | string;
+  smtpSecure: boolean | string;
+  smtpUser: string;
+  smtpPass: string;
+  from: string;
+  to: string;
+  mailOnSuccess?: boolean | string;
+};
+
+type FailedTest = {
+  name: string;
+  status: string;
+  duration: number;
+  error: string;
+  project: string;
+};
+
+type ReporterSummary = {
+  total: number;
+  passed: number;
+  failed: number;
+  flaky: number;
+  skipped: number;
+  failedTests: FailedTest[];
+  startTime: Date | null;
+  endTime: Date | null;
+};
 
 const ansiToHtml = new AnsiToHtml();
 
-class EmailReporter {
-  constructor(options) {
+const toBoolean = (value: boolean | string | undefined): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+  return value.toLowerCase() === "true";
+};
+
+class EmailReporter implements Reporter {
+  private readonly options: ReporterOptions;
+  private readonly results: ReporterSummary;
+  private readonly reportLink: string | null;
+  private readonly mailOnSuccess: boolean;
+  private readonly reportName: string;
+  private readonly reportDesc: string;
+  private suite: Suite | null = null;
+
+  constructor(options: ReporterOptions) {
     this.options = options;
     this.results = {
       total: 0,
@@ -14,89 +70,111 @@ class EmailReporter {
       skipped: 0,
       failedTests: [],
       startTime: null,
-      endTime: null
+      endTime: null,
     };
-    this.reportLink = options.reportLink || null;
-    this.mailOnSuccess = options.mailOnSuccess || false; // Default to false
-    this.reportName = options.reportName || 'Playwright Test Report';
-    this.reportDesc = options.reportDesc || '';
-    this.processedTests = new Set(); // To track unique tests
+    // `link` kept for backward compatibility.
+    this.reportLink = options.reportLink ?? options.link ?? null;
+    this.mailOnSuccess = toBoolean(options.mailOnSuccess);
+    this.reportName = options.reportName ?? "Playwright Test Report";
+    this.reportDesc = options.reportDesc ?? "";
   }
 
-  onBegin(config, suite) {
+  onBegin(_config: FullConfig, suite: Suite): void {
     this.results.startTime = new Date();
     this.suite = suite;
   }
 
-  onStdOut(chunk) {
-    const text = chunk.toString("utf-8");
-    process.stdout.write(text);
+  onStdOut(chunk: string | Buffer): void {
+    process.stdout.write(chunk.toString("utf-8"));
   }
 
-  onStdErr(chunk) {
-    const text = chunk.toString("utf-8");
-    process.stderr.write(text);
+  onStdErr(chunk: string | Buffer): void {
+    process.stderr.write(chunk.toString("utf-8"));
   }
 
-  async onEnd() {
-    this.suite.allTests().forEach((test) => {
-      this.results.total++;
+  async onEnd(_result: FullResult): Promise<void> {
+    const tests = this.suite?.allTests() ?? [];
 
-      const results = test.results;
-      const lastResult = results.at(-1);
-
-      if (lastResult.status === "passed" && lastResult.retry > 0) {
-        this.results.flaky++;
-      } else if (lastResult.status === "passed") {
-        this.results.passed++;
-      } else if (lastResult.status === "skipped") {
-        this.results.skipped++;
-      } else {
-        this.results.failed++;
-        const specFileName = test.location.file.split('/').pop();
-        const describePart = test.parent.title;
-        this.results.failedTests.push({
-          name: `${test.title} < ${describePart} < ${specFileName}`,
-          status: lastResult.status,
-          duration: lastResult.duration,
-          error: ansiToHtml.toHtml(lastResult.error?.message || "No error message"),
-          project: test.titlePath()[1] || 'unknown'
-        });
-      }
-    });
+    for (const test of tests) {
+      this.collectTestResult(test);
+    }
 
     this.results.endTime = new Date();
-    const durationInMs = this.results.endTime - this.results.startTime;
-    let duration = this.formatDuration(durationInMs);
+    const startTime = this.results.startTime ?? this.results.endTime;
+    const durationInMs = this.results.endTime.getTime() - startTime.getTime();
+    const duration = this.formatDuration(durationInMs);
 
-    // Send email if mailOnSuccess is true or if there are failed tests
     if (this.mailOnSuccess || this.results.failed > 0) {
       const htmlContent = this.generateHtmlReport(duration);
       await this.sendEmail(htmlContent);
     }
-
   }
 
-  formatDuration(durationInMs) {
+  private collectTestResult(test: TestCase): void {
+    this.results.total++;
+    const testResults = test.results ?? [];
+    const lastResult = testResults.at(-1);
+
+    if (!lastResult) {
+      this.results.skipped++;
+      return;
+    }
+
+    if (lastResult.status === "passed" && lastResult.retry > 0) {
+      this.results.flaky++;
+      return;
+    }
+
+    if (lastResult.status === "passed") {
+      this.results.passed++;
+      return;
+    }
+
+    if (lastResult.status === "skipped") {
+      this.results.skipped++;
+      return;
+    }
+
+    this.results.failed++;
+    this.results.failedTests.push(this.toFailedTest(test, lastResult));
+  }
+
+  private toFailedTest(test: TestCase, testResult: TestResult): FailedTest {
+    const specFileName = test.location.file.split("/").pop() ?? "unknown-file";
+    const describePart = test.parent.title || "unknown-suite";
+    const projectName = test.titlePath().at(1) ?? "unknown";
+    const errorMessage =
+      testResult.error?.message ??
+      testResult.errors?.[0]?.message ??
+      "No error message";
+
+    return {
+      name: `${test.title} < ${describePart} < ${specFileName}`,
+      status: testResult.status,
+      duration: testResult.duration,
+      error: ansiToHtml.toHtml(errorMessage),
+      project: projectName,
+    };
+  }
+
+  private formatDuration(durationInMs: number): string {
     const hours = Math.floor(durationInMs / 3600000);
     const minutes = Math.floor((durationInMs % 3600000) / 60000);
     const seconds = Math.floor((durationInMs % 60000) / 1000);
 
-    const parts = [];
+    const parts: string[] = [];
     if (hours > 0) parts.push(`${hours}h`);
     if (minutes > 0) parts.push(`${minutes}m`);
     if (seconds > 0) parts.push(`${seconds}s`);
 
-    return parts.length > 0 ? parts.join(' ') : `${durationInMs} ms`;
+    return parts.length > 0 ? parts.join(" ") : `${durationInMs} ms`;
   }
 
-  generateHtmlReport(duration) {
+  private generateHtmlReport(duration: string): string {
     const { total, passed, failed, flaky, skipped, failedTests } = this.results;
-
-    let reportLink = '';
-    if (this.reportLink) {
-      reportLink = `The full report can be found at <a href="${this.reportLink}">${this.reportLink}</a>.`
-    }
+    const reportLink = this.reportLink
+      ? `The full report can be found at <a href="${this.reportLink}">${this.reportLink}</a>.`
+      : "";
 
     const failedTestsRows = failedTests
       .map(
@@ -215,11 +293,11 @@ class EmailReporter {
     `;
   }
 
-  async sendEmail(htmlContent) {
+  private async sendEmail(htmlContent: string): Promise<void> {
     const transporter = createTransport({
       host: this.options.smtpHost,
-      port: this.options.smtpPort,
-      secure: this.options.smtpSecure,
+      port: Number(this.options.smtpPort),
+      secure: toBoolean(this.options.smtpSecure),
       auth: {
         user: this.options.smtpUser,
         pass: this.options.smtpPass,
@@ -237,4 +315,4 @@ class EmailReporter {
   }
 }
 
-export default EmailReporter;
+export = EmailReporter;

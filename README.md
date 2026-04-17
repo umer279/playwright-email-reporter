@@ -25,19 +25,22 @@ In your Playwright configuration file (`playwright.config.js`), add the reporter
 ```javascript
 module.exports = {
   reporter: [
-    ['playwright-email-reporter', {
-      reportName: process.env.REPORT_NAME,
-      link: process.env.LINK,
-      reportDesc: process.env.REPORT_DESC,
-      smtpHost: process.env.SMTP_HOST,
-      smtpPort: process.env.SMTP_PORT,
-      smtpSecure: process.env.SMTP_SECURE,
-      smtpUser: process.env.SMTP_USER,
-      smtpPass: process.env.SMTP_PSW,
-      from: process.env.FROM,
-      to: process.env.TO,
-      mailOnSuccess: process.env.MAIL_ON_SUCCESS
-    }],
+    [
+      "playwright-email-reporter",
+      {
+        reportName: process.env.REPORT_NAME,
+        reportLink: process.env.LINK, // alias: link
+        reportDesc: process.env.REPORT_DESC,
+        smtpHost: process.env.SMTP_HOST,
+        smtpPort: process.env.SMTP_PORT,
+        smtpSecure: process.env.SMTP_SECURE,
+        smtpUser: process.env.SMTP_USER,
+        smtpPass: process.env.SMTP_PASS,
+        from: process.env.FROM,
+        to: process.env.TO,
+        mailOnSuccess: process.env.MAIL_ON_SUCCESS,
+      },
+    ],
   ],
 };
 ```
@@ -45,7 +48,7 @@ module.exports = {
 | Option | Description | Required | Default |
 | --- | --- | --- | --- |
 | `reportName` | Name of the test report | `false` | `Playwright Test Report` |
-| `link` | Link to the external test report | `false` | `undefined` |
+| `reportLink` | Link to the external test report (`link` also supported as legacy alias) | `false` | `undefined` |
 | `reportDesc` | Description of the test report | `false` | `undefined` |
 | `smtpHost` | SMTP server host | `true` | `undefined` |
 | `smtpPort` | SMTP server port | `true` | `undefined` |
@@ -73,6 +76,13 @@ module.exports = {
 ### Notes for Gmail Users
 - Use an **App Password** instead of your main Gmail password.
 - [Google Account App Passwords Guide](https://support.google.com/accounts/answer/185833).
+
+## Local Development
+
+```bash
+npm run build
+npm test
+```
 
 ## Contributing
 
